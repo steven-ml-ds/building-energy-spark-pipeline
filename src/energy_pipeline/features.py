@@ -24,7 +24,13 @@ from __future__ import annotations
 import math
 
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import Imputer, OneHotEncoder, StringIndexer, VectorAssembler
+from pyspark.ml.feature import (
+    Imputer,
+    OneHotEncoder,
+    SQLTransformer,
+    StringIndexer,
+    VectorAssembler,
+)
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
@@ -84,11 +90,16 @@ def add_time_features(df: DataFrame, ts_col: str) -> DataFrame:
     )
 
 
-def add_wind_features(df: DataFrame) -> DataFrame:
-    """Cyclical encoding for wind direction (degrees -> sin/cos)."""
-    return df.withColumn(
-        "wind_dir_sin", F.sin(2 * math.pi * F.col("wind_direction") / 360)
-    ).withColumn("wind_dir_cos", F.cos(2 * math.pi * F.col("wind_direction") / 360))
+# Cyclical wind-direction encoding. This runs as a pipeline stage AFTER the
+# Imputer (see build_preprocessing_stages) so it reads imputed wind_direction
+# values rather than nulls — encoding it eagerly in engineer_features would
+# bake nulls into wind_dir_sin/cos before imputation had a chance to run.
+_WIND_ENCODING_SQL = (
+    "SELECT *, "
+    "SIN(2*PI()*wind_direction/360) AS wind_dir_sin, "
+    "COS(2*PI()*wind_direction/360) AS wind_dir_cos "
+    "FROM __THIS__"
+)
 
 
 def add_building_features(df: DataFrame) -> DataFrame:
@@ -105,10 +116,11 @@ def engineer_features(df: DataFrame, ts_col: str) -> DataFrame:
     NOT done here — they are stages of the persisted ML pipeline so that the
     statistics learned at training time (means, category indices) are reused
     verbatim at serving time. This function only computes deterministic,
-    row-local transforms.
+    row-local transforms that do not depend on imputed columns. Wind-direction
+    cyclical encoding is deferred to a pipeline stage so it runs after
+    imputation (see :func:`build_preprocessing_stages`).
     """
     df = add_time_features(df, ts_col)
-    df = add_wind_features(df)
     df = add_building_features(df)
     return df
 
@@ -126,7 +138,9 @@ def build_preprocessing_stages() -> list:
             inputCols=WEATHER_NUMERIC_COLS,
             outputCols=WEATHER_NUMERIC_COLS,
             strategy="mean",
-        )
+        ),
+        # Encode wind direction only after wind_direction has been imputed above.
+        SQLTransformer(statement=_WIND_ENCODING_SQL),
     ]
     for col in CATEGORICAL_COLS:
         stages.append(StringIndexer(inputCol=col, outputCol=f"{col}_idx", handleInvalid="keep"))

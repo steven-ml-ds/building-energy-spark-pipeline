@@ -60,7 +60,9 @@ def test_train_serve_parity(spark):
     df = spark.createDataFrame([row])
     a = features.engineer_features(df, ts_col="event_time").first()
     b = features.engineer_features(df, ts_col="event_time").first()
-    for col in ("time_sin", "time_cos", "month_sin", "wind_dir_sin", "log_square_feet", "decade"):
+    # wind_dir_sin/cos are produced inside the pipeline (after imputation), not
+    # by engineer_features, so they are not asserted here.
+    for col in ("time_sin", "time_cos", "month_sin", "log_square_feet", "decade"):
         assert a[col] == b[col]
 
 
@@ -82,3 +84,17 @@ def test_pipeline_produces_feature_vector(spark):
     out = model.transform(df)
     assert "features" in out.columns
     assert "prediction" in out.columns
+
+
+def test_wind_direction_imputed_before_encoding(spark):
+    """A null wind_direction must be imputed before the cyclical encoding runs,
+    so wind_dir_sin/cos are never null in the assembled feature space."""
+    rows = _sample_rows()
+    rows[0]["wind_direction"] = None  # missing reading
+    df = features.engineer_features(spark.createDataFrame(rows), ts_col="event_time")
+    estimator = GBTRegressor(
+        featuresCol="features", labelCol="energy_consumption", maxIter=2, maxDepth=2
+    )
+    model = features.build_estimator_pipeline(estimator).fit(df)
+    out = model.transform(df).select("wind_dir_sin", "wind_dir_cos").collect()
+    assert all(r["wind_dir_sin"] is not None and r["wind_dir_cos"] is not None for r in out)

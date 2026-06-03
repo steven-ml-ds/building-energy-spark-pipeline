@@ -47,7 +47,6 @@ def train(config: Config) -> dict:
     spark = build_spark(config)
     try:
         frame = datasets.build_training_frame(spark, config)
-        frame = datasets.remove_outliers(frame, config.model.label_col, config.model.outlier_sigma)
 
         if config.model.sample_fraction < 1.0:
             frame = frame.sample(
@@ -59,6 +58,13 @@ def train(config: Config) -> dict:
         train_df, test_df = frame.randomSplit(
             [config.model.train_ratio, 1 - config.model.train_ratio], seed=config.model.seed
         )
+
+        # Fit outlier bounds on the training split only (avoids test-set leakage),
+        # then clean the training data. The test set stays representative.
+        lo, hi = datasets.compute_outlier_bounds(
+            train_df, config.model.label_col, config.model.outlier_sigma
+        )
+        train_df = datasets.filter_outliers(train_df, config.model.label_col, lo, hi)
         train_df.cache()
 
         _benchmark(train_df, test_df, config)

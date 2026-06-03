@@ -77,11 +77,22 @@ def build_training_frame(spark: SparkSession, config: Config) -> DataFrame:
     return features.engineer_features(frame, ts_col="interval_start")
 
 
-def remove_outliers(df: DataFrame, label_col: str, sigma: float) -> DataFrame:
-    """Drop rows whose label lies more than ``sigma`` std-devs from the mean."""
+def compute_outlier_bounds(df: DataFrame, label_col: str, sigma: float):
+    """Fit ``(lo, hi)`` label bounds at ``sigma`` std-devs from the mean.
+
+    Fit this on the *training* split only — fitting on the full frame before the
+    train/test split would leak test-set statistics into the filter decision.
+    Returns ``(None, None)`` when statistics are undefined (e.g. empty frame).
+    """
     stats = df.select(F.mean(label_col).alias("mean"), F.stddev(label_col).alias("std")).first()
     mean_val, std_val = stats["mean"], stats["std"]
     if mean_val is None or std_val is None:
+        return None, None
+    return mean_val - sigma * std_val, mean_val + sigma * std_val
+
+
+def filter_outliers(df: DataFrame, label_col: str, lo, hi) -> DataFrame:
+    """Drop rows whose label falls outside precomputed ``[lo, hi]`` bounds."""
+    if lo is None or hi is None:
         return df
-    lo, hi = mean_val - sigma * std_val, mean_val + sigma * std_val
     return df.filter((F.col(label_col) >= lo) & (F.col(label_col) <= hi))
