@@ -1,171 +1,147 @@
 # Building Energy Consumption Prediction Pipeline
 
-> End-to-end pipeline combining batch ML and real-time streaming to predict hourly building energy consumption.
+> End-to-end PySpark pipeline combining batch ML training and real-time
+> streaming inference to predict 6-hourly building energy consumption.
 
+![CI](https://github.com/steven-ml-ds/building-energy-spark-pipeline/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
-![PySpark](https://img.shields.io/badge/PySpark-3.4-orange?logo=apache-spark)
-![Kafka](https://img.shields.io/badge/Apache%20Kafka-3.x-black?logo=apache-kafka)
-![Docker](https://img.shields.io/badge/Docker-required-blue?logo=docker)
+![PySpark](https://img.shields.io/badge/PySpark-3.4.1-orange?logo=apachespark)
+![Kafka](https://img.shields.io/badge/Kafka-KRaft-black?logo=apachekafka)
 
 ---
 
-## Project Overview
+## Why this repo is structured the way it is
 
-This project implements a full end-to-end energy prediction system across two components:
+This started as three notebooks. It has been refactored into an installable
+Python package because the headline risk in any ML system is **training/serving
+skew** — the model behaving differently in production than in training. The
+single most important design decision here is that **batch and streaming share
+one feature-engineering module** (`energy_pipeline.features`) and one persisted
+Spark ML `Pipeline`, so the two paths physically cannot drift apart.
 
-| Component | Notebook | Description |
-|-----------|----------|-------------|
-| **Batch ML Pipeline** | `01_batch_ml_energy_prediction.ipynb` | Trains and tunes a GBT regression model on historical building, meter, and weather data |
-| **Kafka Producer** | `02_kafka_producer.ipynb` | Simulates a real-time weather data stream by publishing to a Kafka topic |
-| **Spark Streaming** | `03_spark_streaming_prediction.ipynb` | Consumes the Kafka stream, applies the saved ML pipeline, and persists predictions |
+See [`docs/design.md`](docs/design.md) for the architecture decisions and the
+two skew bugs this refactor fixed.
 
 ---
 
 ## Architecture
 
 ```
-  BATCH PIPELINE
-  ----------------------------------------
-  data/meters.csv            +---------------------+
-  data/building_info.csv --> |  01  Batch ML       |
-  data/weather.csv           |  (PySpark + GBT)    |
-                             +----------+----------+
-                                        |
-                             models/energy_pipeline_model
-                                        |
-  STREAMING PIPELINE                    |
-  ----------------------------------------
-  data/weather.csv                      |
-       |                                |
-       v                                v
-  +---------------+  weather-stream  +------------------+
-  | 02  Kafka     | ---------------> | 03  Spark        |
-  |    Producer   |  (Kafka topic)   |    Streaming     |
-  +---------------+                  +--------+---------+
-                                              |
-                                    +---------+---------+
-                                    |                   |
-                              output/predictions   output/hourly_*
-                                                   output/daily_*
+                ┌─────────────────────────────────────────────┐
+   BATCH        │  meters.csv ─┐                               │
+   ──────       │  buildings ──┼─▶ datasets.build_training_frame│
+                │  weather.csv ┘        │                      │
+                │                       ▼                      │
+                │              features.engineer_features      │
+                │                       │                      │
+                │   ┌───────────────────┴───────────────────┐  │
+                │   │  Spark ML Pipeline (PERSISTED)         │  │
+                │   │  Imputer ▸ StringIndexer ▸ OHE ▸       │  │
+                │   │  VectorAssembler ▸ GBTRegressor        │  │
+                │   └───────────────────┬───────────────────┘  │
+                └───────────────────────┼──────────────────────┘
+                                        ▼
+                          artifacts/energy_pipeline_model
+                                        │
+   STREAMING                            │  (same pipeline, same features module)
+   ─────────   weather.csv              ▼
+   producer ──▶ Kafka(weather-stream) ──▶ stream_infer
+                                        │
+              ┌─────────────────────────┼──────────────────────────┐
+              ▼                         ▼                          ▼
+     artifacts/output/predictions   hourly_aggregations    daily_aggregations
+              │
+              └──▶ Kafka(predictions-stream)
 ```
 
 ---
 
-## Dataset Description
+## Project layout
 
-Place the following CSV files in the `data/` directory (not tracked by git):
-
-| File | Description |
-|------|-------------|
-| `meters.csv` | Hourly energy consumption readings - columns: `building_id`, `meter_type`, `timestamp`, `value` |
-| `building_information.csv` | Building metadata - columns: `site_id`, `primary_use`, `square_feet`, `floor_count`, `year_built`, latent features |
-| `new_building_information.csv` | Updated building metadata used by the streaming pipeline |
-| `weather.csv` | Hourly weather readings per site - columns: `site_id`, `timestamp`, `air_temperature`, `wind_speed`, `cloud_coverage`, `sea_level_pressure` |
-
----
-
-## Methodology
-
-### Notebook 01 - Batch ML Pipeline
-
-1. **Data Loading** - Define typed schemas and load `meters.csv`, `building_information.csv`, and `weather.csv` into Spark DataFrames
-2. **Aggregation** - Resample hourly meter readings into 6-hour interval totals per building
-3. **Weather Imputation** - Fill missing weather values using Spark MLlib `Imputer` (mean strategy)
-4. **Feature Engineering**
-   - Log-transform `square_feet` to reduce skew
-   - One-hot encode `primary_use` and `meter_type`
-   - Cyclical encode `time_interval`, `wind_direction`, and `month` (sine/cosine)
-   - Derive `decade` from `year_built`
-5. **Model Training** - Compare Random Forest vs Gradient Boosted Trees using RMSE, MAE, R2, and RMSLE
-6. **Hyperparameter Tuning** - `CrossValidator` with `ParamGridBuilder` over `maxDepth`, `maxIter`, `stepSize`
-7. **Model Persistence** - Save best GBT pipeline to `models/energy_pipeline_model`
-
-### Notebook 02 - Kafka Producer
-
-1. Read `data/weather.csv` in chronological order, maintaining a file pointer
-2. Every 5 seconds, publish a 5-day batch (120 records) as a JSON payload to the `weather-stream` Kafka topic
-3. Stamp each day's records with the current Unix timestamp to simulate real-time event ordering
-
-### Notebook 03 - Spark Structured Streaming
-
-1. **Ingestion** - Subscribe to `weather-stream` Kafka topic; deserialise JSON into a typed schema
-2. **Join** - Enrich weather stream with building metadata from `data/new_building_information.csv`
-3. **Watermarking** - Discard records arriving more than 5 seconds late
-4. **Feature Engineering** - Replicate the same transforms used in notebook 01
-5. **Inference** - Load `models/energy_pipeline_model` and apply to each micro-batch
-6. **Output**
-   - `output/predictions` - raw per-record predictions (Parquet, append mode)
-   - `output/hourly_aggregations` - 6-hour window aggregations per building (Parquet, every 7 s)
-   - `output/daily_aggregations` - 1-day window aggregations per site (Parquet, every 14 s)
-7. **Re-publish** - Stream each Parquet output back to dedicated Kafka topics
+```
+src/energy_pipeline/
+├── config.py        # env-overridable configuration (no hard-coded paths)
+├── schemas.py       # centralised, typed Spark schemas
+├── features.py      # SHARED feature engineering + ML preprocessing stages
+├── datasets.py      # batch dataset assembly (aggregate + join)
+├── metrics.py       # RMSE / MAE / R² / RMSLE
+├── spark.py         # SparkSession factory
+├── batch_train.py   # entry point: train & persist the tuned pipeline
+├── producer.py      # entry point: Kafka weather producer
+└── stream_infer.py  # entry point: Structured Streaming inference
+tests/               # pytest suite (incl. skew regression test)
+docker/              # Kafka (KRaft) compose file
+notebooks/           # original notebooks, kept for EDA / storytelling
+docs/design.md       # architecture decisions & fixed bugs
+```
 
 ---
 
-## How to Run
-
-### Prerequisites
-
-- Python 3.9+
-- Docker (for Kafka)
-- All packages from `requirements.txt`
+## Quick start
 
 ```bash
-pip install -r requirements.txt
+# 1. Install (editable, with dev + viz extras)
+make dev                      # or: pip install -e ".[dev,viz]"
+
+# 2. Place the CSVs in data/ (see data/README.md)
+
+# 3. Train the model (use a sample for a fast first run)
+make train ARGS="--sample-fraction 0.05"
+
+# 4. Start Kafka, the producer, and the streaming job (3 terminals)
+make kafka-up
+make produce
+make stream
 ```
 
-### Step 1 - Train and save the ML pipeline
+Console scripts are also installed: `energy-train`, `energy-produce`, `energy-stream`.
 
-Open and run all cells in `01_batch_ml_energy_prediction.ipynb`.  
-This produces `models/energy_pipeline_model/`.
+---
 
-### Step 2 - Start Kafka with Docker
+## Configuration
+
+Everything is configured via environment variables with safe defaults — see
+[`.env.example`](.env.example). Examples:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATA_ROOT` | `data` | Input CSV directory |
+| `ARTIFACT_ROOT` | `artifacts` | Model / output / checkpoint root |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka brokers |
+| `MODEL_SAMPLE_FRACTION` | `1.0` | Training subsample (e.g. `0.05` for demos) |
+| `SPARK_TIMEZONE` | `Australia/Melbourne` | Session timezone |
+
+---
+
+## Development
 
 ```bash
-docker run -d --name kafka \
-  -p 9092:9092 \
-  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
-  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092 \
-  -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 \
-  confluentinc/cp-kafka:latest
+make lint      # ruff
+make fmt       # ruff --fix + format
+make test      # pytest
+make cov       # pytest with coverage
 ```
 
-Or use a `docker-compose.yml` that includes both Zookeeper and Kafka.
-
-### Step 3 - Start the Kafka producer
-
-Open and run `02_kafka_producer.ipynb`.  
-It will begin publishing weather batches every 5 seconds.
-
-### Step 4 - Start the streaming pipeline
-
-Open and run `03_spark_streaming_prediction.ipynb`.  
-Predictions will accumulate in the `output/` directory as Parquet files.
+CI (GitHub Actions) provisions JDK 17 + Python 3.9, then runs lint and the full
+test suite — including a regression test that fails if the streaming feature
+path ever diverges from training again.
 
 ---
 
-## Tech Stack
+## Tech stack
 
-| Technology | Role |
-|------------|------|
-| Python 3.9+ | Primary language |
-| Apache PySpark 3.4 | Distributed data processing and ML (batch + streaming) |
-| Apache Kafka | Real-time message broker |
-| Spark Structured Streaming | Stateful streaming with watermarks and windowed aggregations |
-| Docker | Kafka and Zookeeper infrastructure |
-| pandas / matplotlib / seaborn | Data exploration and visualisation |
+| Layer | Technology |
+|-------|------------|
+| Processing / ML | PySpark 3.4.1 (Spark ML, Structured Streaming) |
+| Messaging | Apache Kafka (KRaft mode) |
+| Producer client | kafka-python |
+| Packaging | setuptools (src layout), `pyproject.toml` |
+| Quality | pytest, ruff, pre-commit, GitHub Actions |
+| EDA | pandas, matplotlib, seaborn (notebooks) |
 
 ---
 
-## Project Structure
+## Dataset
 
-```
-building-energy-spark-pipeline/
-|-- 01_batch_ml_energy_prediction.ipynb   # Batch ML pipeline
-|-- 02_kafka_producer.ipynb               # Kafka weather data producer
-|-- 03_spark_streaming_prediction.ipynb   # Spark Structured Streaming pipeline
-|-- requirements.txt
-|-- .gitignore
-|-- images/                               # Architecture diagrams (optional)
-`-- data/
-    `-- README.md                         # Dataset descriptions (CSVs not tracked)
-```
+CSV files are not tracked by git. See [`data/README.md`](data/README.md) for the
+expected files and column definitions.

@@ -1,8 +1,6 @@
-pyspark
-kafka3
-pandas
-numpy
-matplotlib
-seaborn
-jupyter
-ipykernel
+# Runtime dependencies (pinned for reproducibility).
+# For development extras (tests, lint) install: pip install -e ".[dev]"
+pyspark==3.4.1
+kafka-python==2.0.2
+pandas==2.0.3
+numpy==1.24.4
