@@ -1,0 +1,12 @@
+apiVersion: 1
+
+# Auto-registers Prometheus as the default datasource so the bundled dashboard
+# resolves its `prometheus` datasource uid without any manual setup.
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

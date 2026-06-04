@@ -52,6 +52,9 @@ two skew bugs this refactor fixed.
      artifacts/output/predictions   hourly_aggregations    daily_aggregations
               │
               └──▶ Kafka(predictions-stream)
+                              │
+   DASHBOARD                  ▼  (Kafka can't be queried directly)
+   ─────────      dashboard_export ──▶ Prometheus ──▶ Grafana (live, :3000)
 ```
 
 ---
@@ -68,11 +71,13 @@ src/energy_pipeline/
 ├── spark.py         # SparkSession factory
 ├── batch_train.py   # entry point: train & persist the tuned pipeline
 ├── producer.py      # entry point: Kafka weather producer
-└── stream_infer.py  # entry point: Structured Streaming inference
+├── stream_infer.py  # entry point: Structured Streaming inference
+└── dashboard_export.py # entry point: Kafka predictions ▸ Prometheus exporter
 tests/               # pytest suite (incl. skew regression test)
-docker/              # Kafka (KRaft) compose file
+docker/              # Kafka (KRaft) + Prometheus + Grafana compose & provisioning
 notebooks/           # original notebooks, kept for EDA / storytelling
 docs/design.md       # architecture decisions & fixed bugs
+docs/dashboard.md    # streaming dashboard: how it works & how to run it
 ```
 
 ---
@@ -88,13 +93,21 @@ make dev                      # or: pip install -e ".[dev,viz]"
 # 3. Train the model (use a sample for a fast first run)
 make train ARGS="--sample-fraction 0.05"
 
-# 4. Start Kafka, the producer, and the streaming job (3 terminals)
-make kafka-up
-make produce
-make stream
+# 4. Start the full stack (Kafka + Prometheus + Grafana), the producer,
+#    the streaming job, and the metrics exporter (separate terminals)
+make up                # Kafka + Prometheus + Grafana
+make produce           # publish weather events
+make stream            # score them through the persisted pipeline
+make dashboard-export  # bridge predictions ▸ Prometheus
+
+# 5. Open the live dashboard
+open http://localhost:3000   # Grafana ▸ "Building Energy — Streaming Predictions"
 ```
 
-Console scripts are also installed: `energy-train`, `energy-produce`, `energy-stream`.
+Console scripts are also installed: `energy-train`, `energy-produce`, `energy-stream`,
+`energy-dashboard-export`.
+
+See [`docs/dashboard.md`](docs/dashboard.md) for how the real-time visualization is wired.
 
 ---
 
@@ -110,6 +123,7 @@ Everything is configured via environment variables with safe defaults — see
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka brokers |
 | `MODEL_SAMPLE_FRACTION` | `1.0` | Training subsample (e.g. `0.05` for demos) |
 | `SPARK_TIMEZONE` | `Australia/Melbourne` | Session timezone |
+| `DASHBOARD_EXPORTER_PORT` | `8000` | Port the Prometheus exporter serves `/metrics` on |
 
 ---
 

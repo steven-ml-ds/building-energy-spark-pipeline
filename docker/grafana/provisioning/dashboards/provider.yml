@@ -1,0 +1,14 @@
+apiVersion: 1
+
+# Loads every dashboard JSON mounted under /var/lib/grafana/dashboards on startup,
+# so the streaming dashboard appears automatically with no import step.
+providers:
+  - name: energy-pipeline
+    orgId: 1
+    folder: Energy Pipeline
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -24,3 +24,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Scrapes the host-side Kafka->Prometheus exporter (energy_pipeline.dashboard_export).
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # Lets the container reach the host-run exporter on Linux too (a no-op on Docker Desktop).
+      - "host.docker.internal:host-gateway"
+
+  # Pre-provisioned dashboard; anonymous viewer access so it opens without a login.
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
