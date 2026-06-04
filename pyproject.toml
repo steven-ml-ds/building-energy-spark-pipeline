@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "energy-pipeline"
+version = "1.0.0"
+description = "Batch ML + streaming inference pipeline for building energy consumption prediction"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+dependencies = [
+    "pyspark==3.4.1",
+    "kafka-python==2.0.2",
+    "pandas==2.0.3",
+    "numpy==1.24.4",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib==3.7.5", "seaborn==0.13.2", "jupyter==1.0.0", "ipykernel==6.29.5"]
+dev = [
+    "pytest==7.4.4",
+    "pytest-cov==4.1.0",
+    "ruff==0.5.7",
+    "pre-commit==3.5.0",
+]
+
+[project.scripts]
+energy-train = "energy_pipeline.batch_train:main"
+energy-produce = "energy_pipeline.producer:main"
+energy-stream = "energy_pipeline.stream_infer:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+source = ["energy_pipeline"]
