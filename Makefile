@@ -1,10 +1,11 @@
-.PHONY: install dev lint fmt test cov train produce stream kafka-up kafka-down clean
+.PHONY: install dev lint fmt test cov train produce stream dashboard-export \
+	up down kafka-up kafka-down clean
 
 install:        ## Install runtime package
 	pip install -e .
 
-dev:            ## Install with dev + viz extras and pre-commit hooks
-	pip install -e ".[dev,viz]"
+dev:            ## Install with dev + viz + dashboard extras and pre-commit hooks
+	pip install -e ".[dev,viz,dashboard]"
 	pre-commit install
 
 lint:           ## Lint with ruff
@@ -29,8 +30,17 @@ produce:        ## Start the Kafka weather producer
 stream:         ## Start the streaming inference job
 	python -m energy_pipeline.stream_infer
 
-kafka-up:       ## Start Kafka (KRaft) via docker compose
+dashboard-export: ## Bridge Kafka predictions -> Prometheus metrics (:8000/metrics)
+	python -m energy_pipeline.dashboard_export $(ARGS)
+
+up:             ## Start full stack: Kafka + Prometheus + Grafana (Grafana on :3000)
 	docker compose -f docker/docker-compose.yml up -d
+
+down:           ## Stop the full stack
+	docker compose -f docker/docker-compose.yml down
+
+kafka-up:       ## Start only Kafka (KRaft) via docker compose
+	docker compose -f docker/docker-compose.yml up -d kafka
 
 kafka-down:     ## Stop Kafka
 	docker compose -f docker/docker-compose.yml down

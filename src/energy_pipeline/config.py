@@ -114,12 +114,20 @@ class StreamConfig:
 
 
 @dataclass(frozen=True)
+class DashboardConfig:
+    """Settings for the Kafka -> Prometheus exporter behind the Grafana dashboard."""
+
+    exporter_port: int = _env_int("DASHBOARD_EXPORTER_PORT", 8000)
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths = field(default_factory=Paths)
     kafka: KafkaConfig = field(default_factory=KafkaConfig)
     spark: SparkConfig = field(default_factory=SparkConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
     def as_dict(self) -> dict:
         return asdict(self)
