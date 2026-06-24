@@ -29,12 +29,15 @@ from .config import Config, load_config
 
 log = logging.getLogger("energy_pipeline.dashboard_export")
 
+# The metric family handed around as a dict; aliased for readable signatures.
+MetricFamily = dict[str, Counter | Gauge | Histogram]
+
 # Bucket boundaries for the predicted-consumption distribution. Kept coarse so
 # the histogram stays cheap while still showing the shape of the predictions.
 _CONSUMPTION_BUCKETS = (50, 100, 250, 500, 1000, 2500, 5000, 10000)
 
 
-def build_metrics(registry: CollectorRegistry) -> dict:
+def build_metrics(registry: CollectorRegistry) -> MetricFamily:
     """Construct the metric family used by the dashboard.
 
     Labels are deliberately limited to ``meter_type`` and ``site_id`` (both
@@ -68,7 +71,7 @@ def build_metrics(registry: CollectorRegistry) -> dict:
     }
 
 
-def _parse_event_time(value) -> dt.datetime | None:
+def _parse_event_time(value: object) -> dt.datetime | None:
     """Parse the ISO-8601 ``event_time`` emitted by Spark's ``to_json``."""
     if not value:
         return None
@@ -79,7 +82,7 @@ def _parse_event_time(value) -> dt.datetime | None:
         return None
 
 
-def update_metrics(metrics: dict, record: dict, now: dt.datetime | None = None) -> None:
+def update_metrics(metrics: MetricFamily, record: dict, now: dt.datetime | None = None) -> None:
     """Fold a single prediction record into the metric family.
 
     Pure and side-effect-isolated to the passed-in metrics, so it is unit

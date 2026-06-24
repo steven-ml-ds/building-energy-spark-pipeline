@@ -86,3 +86,48 @@ def test_distribution_histogram_observes_value():
 
     count = registry.get_sample_value("energy_predicted_consumption_distribution_count")
     assert count == 1.0
+
+
+def test_distribution_histogram_places_value_in_correct_bucket():
+    registry = CollectorRegistry()
+    metrics = dashboard_export.build_metrics(registry)
+
+    # 300 falls in the (250, 500] bucket: it is counted in le=500 and above,
+    # but not in le=250 or le=100.
+    dashboard_export.update_metrics(metrics, _record(prediction=300.0))
+
+    assert (
+        registry.get_sample_value(
+            "energy_predicted_consumption_distribution_bucket", {"le": "100.0"}
+        )
+        == 0.0
+    )
+    assert (
+        registry.get_sample_value(
+            "energy_predicted_consumption_distribution_bucket", {"le": "250.0"}
+        )
+        == 0.0
+    )
+    assert (
+        registry.get_sample_value(
+            "energy_predicted_consumption_distribution_bucket", {"le": "500.0"}
+        )
+        == 1.0
+    )
+
+
+def test_missing_labels_fall_back_to_unknown():
+    registry = CollectorRegistry()
+    metrics = dashboard_export.build_metrics(registry)
+
+    record = _record(prediction=42.0)
+    del record["meter_type"]
+    del record["site_id"]
+    dashboard_export.update_metrics(metrics, record)
+
+    assert (
+        registry.get_sample_value(
+            "energy_predicted_consumption", {"meter_type": "unknown", "site_id": "unknown"}
+        )
+        == 42.0
+    )
