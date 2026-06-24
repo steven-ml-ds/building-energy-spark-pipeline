@@ -10,6 +10,31 @@
 
 ---
 
+## Impact / Decision
+
+**Question:** Can one pipeline predict 6-hourly building energy use for both batch
+planning *and* live operations without the two paths quietly disagreeing?
+
+**Decision this drives:** Forecasts feed both retrospective batch analysis and real-time
+streaming inference. If those two paths compute features differently, the live system
+silently degrades — the most expensive and least visible failure mode in production ML.
+
+**What it's worth:** This repo's headline result is **eliminating training/serving skew
+by construction**. Batch and streaming import the *same* `features.py` and load the *same*
+persisted Spark ML `Pipeline`, so they physically cannot drift. The refactor from three
+notebooks into one package surfaced **two silent skew bugs** that had been producing
+different features in each path; both are now locked out by a **skew regression test** in CI
+— a reviewer can change one path and watch the test fail before it ships.
+
+**Why it matters operationally:** a model that's accurate offline but skewed online looks
+fine on every dashboard until someone audits predictions. Making skew a *tested invariant*
+turns a silent correctness risk into a loud build failure.
+
+> Stack: PySpark (Imputer ▸ StringIndexer ▸ OHE ▸ VectorAssembler ▸ GBTRegressor),
+> Kafka (KRaft) + Structured Streaming · config-driven, no hard-coded paths · CI on every push.
+
+---
+
 ## Why this repo is structured the way it is
 
 This started as three notebooks. It has been refactored into an installable
