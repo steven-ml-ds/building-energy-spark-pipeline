@@ -22,6 +22,7 @@ import argparse
 import datetime as dt
 import json
 import logging
+from typing import Union
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
 
@@ -30,7 +31,10 @@ from .config import Config, load_config
 log = logging.getLogger("energy_pipeline.dashboard_export")
 
 # The metric family handed around as a dict; aliased for readable signatures.
-MetricFamily = dict[str, Counter | Gauge | Histogram]
+# NB: this is a runtime alias (a real assignment), so ``from __future__ import
+# annotations`` does NOT defer it — use typing.Union rather than the PEP 604
+# ``|`` operator, which only works at runtime on Python >= 3.10 (CI pins 3.9).
+MetricFamily = dict[str, Union[Counter, Gauge, Histogram]]
 
 # Bucket boundaries for the predicted-consumption distribution. Kept coarse so
 # the histogram stays cheap while still showing the shape of the predictions.
